@@ -1,0 +1,10 @@
+langchain
+langchain-community
+langchain-openai
+qdrant-client
+sqlalchemy
+python-dotenv
+openai
+psycopg2-binary
+pypdf
+langfuse
