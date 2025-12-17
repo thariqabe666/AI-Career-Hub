@@ -7,3 +7,5 @@ python-dotenv
 openai
 pypdf
 langfuse
+SpeechRecognition
+pyaudio
