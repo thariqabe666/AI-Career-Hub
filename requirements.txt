@@ -8,4 +8,5 @@ openai
 pypdf
 langfuse
 SpeechRecognition
-pyaudio
+streamlit
+streamlit-mic-recorder
