@@ -38,7 +38,7 @@ class RAGAgent:
         self.embeddings = OpenAIEmbeddings(model="text-embedding-3-small", api_key=api_key)
         
         # Initialize LLM
-        self.llm = ChatOpenAI(model="gpt-4o-mini", temperature=0, api_key=api_key)
+        self.llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.7, api_key=api_key)
         
         # Prompt Template
         self.template = """Answer the question based only on the following context:
@@ -46,9 +46,26 @@ class RAGAgent:
 
         Question: {question}
         
-        If you cannot find the answer in the context, please say "I don't have enough information in my knowledge base to answer this."
+        If you cannot find the answer in the context, please response anything that relevant according to the user's question
         """
-        self.prompt = ChatPromptTemplate.from_template(self.template)
+        self.prompt = ChatPromptTemplate.from_template(
+            """You are a helpful Careeer Assistant.
+            
+            Context from our database:
+            {context}
+            
+            User Question:
+            {question}
+            
+            Instructions:
+            1. If the context contains relevant information, answer the question clearly using that information.
+            2. If the context is empty or doesn't have the answer, DO NOT say "I don't know" or "No data".
+            3. Instead, give a general professional response based on your general knowledge as an AI, then suggest what the user can ask or do next (e.g., "Currently, I don't have specific job listings for that, but generally for this role you should prepare...")
+            4. Keep the tone encouraging and professional.
+
+            Your Response:
+            """
+        )
         
         # Initialize Langfuse CallbackHandler
         self.langfuse_handler = CallbackHandler()
@@ -90,15 +107,32 @@ class RAGAgent:
         docs = self.retrieve_documents(query)
         
         if not docs:
-            return "I couldn't find any relevant information in the database."
+            context_text = "No specific data found in the database. Please answer using your general knowledge."
+        else:
+            context_text = "\n\n".join([doc.page_content for doc in docs])
         
-        # 2. Format context
-        context_text = "\n\n".join([doc.page_content for doc in docs])
+        flexible_prompt = ChatPromptTemplate.from_template(
+            """You are a professional Career Assistant.
+            CONTEXT FROM DATABASE:
+            {context}
+            USER QUESTION:
+            {question}
+            INSTRUCTIONS:
+            1. LANGUAGE CONSISTENCY: Detect the language of the user's question. ALWAYS respond in the SAME LANGUAGE as the user (e.g., if asked in Indonesian, respond in Indonesian; if asked in English, respond in English).
+            2. SMART RETRIEVAL: If the DATABASE CONTEXT contains relevant information, use it to provide a detailed answer.
+            3. NO-FAIL POLICY: If the CONTEXT is empty, irrelevant, or does not contain specific data, DO NOT say "I don't know", "I don't have enough information", or "No data found".
+            4. FALLBACK STRATEGY: In case of empty context, provide a high-quality response based on your general knowledge as a career expert. Offer helpful suggestions, industry trends, or general career advice related to the user's query.
+            5. GENERAL INTERACTION: For greetings (Hi, Hello), introductions, or general small talk, respond naturally and warmly without being restricted by the database context.
+            6. JOB SPECIFIC QUERIES: For specific job opening questions, check the context first. If not found, explain that while specific local listings aren't available right now, you can provide general advice on how to apply for such roles.
+            7. TONE: Maintain a friendly, professional, and encouraging persona at all times.
+            YOUR RESPONSE:
+            """
+        )
         
         # 3. Generate
-        chain = self.prompt | self.llm | StrOutputParser()
+        chain = flexible_prompt | self.llm | StrOutputParser()
         
-        response = chain.invoke({"context": context_text, "question": query}, config={"callbacks": [self.langfuse_handler]})
+        response = chain.invoke({"context": context_text, "question": query})
         return response
 
 if __name__ == "__main__":
