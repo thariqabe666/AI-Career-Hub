@@ -28,19 +28,19 @@ agents = init_agents()
 # Sidebar Navigasi
 st.sidebar.title("🚀 Career AI Agent")
 menu = st.sidebar.radio("Pilih Fitur:", [
-    "Smart Chat (SQL & RAG)", 
+    "Smart Chat", 
     "Career Advisor & CV Analysis", 
     "Cover Letter Generator", 
-    "Mock Interview (Voice)"
+    "AI Interview Assistant (Voice)"
 ])
 
 st.sidebar.divider()
 st.sidebar.info("Gunakan sidebar untuk berpindah antar fungsi agent.")
 
 # --- 1. SMART CHAT (ORCHESTRATOR) ---
-if menu == "Smart Chat (SQL & RAG)":
+if menu == "Smart Chat":
     st.header("💬 Smart Career Chat")
-    st.write("Tanyakan data statistik (SQL) atau informasi deskriptif lowongan (RAG).")
+    st.write("Tanyakan data statistik atau informasi deskriptif lowongan")
     
     if "messages" not in st.session_state:
         st.session_state.messages = []
@@ -69,8 +69,14 @@ if menu == "Smart Chat (SQL & RAG)":
                 st.rerun()
                 
 # --- 2. CAREER ADVISOR ---
+
 elif menu == "Career Advisor & CV Analysis":
     st.header("👨‍💼 Career Consultant")
+
+    # 1. Inisialisasi Session State untuk chat Career Advisor
+    if "advisor_messages" not in st.session_state:
+        st.session_state.advisor_messages = []
+
     uploaded_file = st.file_uploader("Upload CV kamu (PDF)", type=["pdf"])
     
     if uploaded_file:
@@ -81,10 +87,48 @@ elif menu == "Career Advisor & CV Analysis":
         if st.button("Analisis CV & Cari Lowongan"):
             with st.spinner("Menganalisis profil kamu..."):
                 report = agents["advisor"].analyze_and_recommend("temp_cv.pdf")
-                st.markdown("### Laporan Konsultasi")
-                st.write(report)
+                st.session_state.current_report = report # Simpan report di state
+                
+                # Masukkan hasil laporan ke dalam history chat sebagai pesan awal AI
+                st.session_state.advisor_messages.append({"role": "assistant", "content": report})
             os.remove("temp_cv.pdf")
 
+    # 2. Tampilkan Riwayat Chat (jika sudah ada analisis)
+    
+    with st.expander("ℹ️ Tips untuk hasil terbaik"):
+        st.markdown("""
+        **Gunakan PDF berbentuk teks untuk mendapatkan report yang lebih akurat.**
+        
+        **Format yang didukung:**
+        - ✅ PDF dengan teks (Berbagai bahasa)
+        """)
+            
+    for message in st.session_state.advisor_messages:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+
+    # 3. Input Message untuk Chat (Hanya muncul jika sudah ada analisis awal)
+    if st.session_state.advisor_messages:
+        if prompt := st.chat_input("Tanyakan lebih detail tentang saran karirmu..."):
+            # Tampilkan pesan user
+            st.session_state.advisor_messages.append({"role": "user", "content": prompt})
+            with st.chat_message("user"):
+                st.markdown(prompt)
+
+            # Minta respon dari Agent (Gunakan Orchestrator atau Advisor)
+            with st.chat_message("assistant"):
+                with st.spinner("Berpikir..."):
+                    # Kita buat history string dari advisor_messages untuk konteks
+                    history_text = "\n".join([f"{m['role']}: {m['content']}" for m in st.session_state.advisor_messages[-5:]])
+                    
+                    # Kamu bisa memanggil orchestrator agar AI tetap ingat konteks CV-mu
+                    response = agents["orchestrator"].route_request(prompt, history_text)
+                    st.markdown(response)
+            
+            # Simpan respon AI
+            st.session_state.advisor_messages.append({"role": "assistant", "content": response})
+            
+    
 # --- 3. COVER LETTER GENERATOR ---
 elif menu == "Cover Letter Generator":
     st.header("📝 Tailored Cover Letter")
@@ -113,66 +157,96 @@ elif menu == "Cover Letter Generator":
 
 from streamlit_mic_recorder import mic_recorder
 import openai
+import os
 
 # --- DI DALAM KONDISI MENU INTERVIEW ---
-if menu == "Mock Interview (Voice)":
-    st.header("🎤 AI Mock Interview")
-
-    if "interview_log" not in st.session_state:
-        st.session_state.interview_log = []
-
-    for msg in st.session_state.interview_log[-3:]:
-        with st.success(f"**You:** {msg}"):
-            st.write(msg)
+if menu == "AI Interview Assistant (Voice)":
     
-    # 1. Inisialisasi State (Hanya jalan sekali di awal)
+        # --- LOGIKA FUNGSIONAL (TIDAK BERUBAH) ---
     if "interview_history" not in st.session_state:
         st.session_state.interview_history = "AI Interviewer: Hello! Let's start. Tell me about yourself.\n"
         st.session_state.current_q = "Hello! Let's start. Tell me about yourself."
-    
-    # 2. Tampilkan Pertanyaan AI
-    st.info(f"**AI Interviewer:** {st.session_state.current_q}")
+        
+    if "interview_log" not in st.session_state:
+        st.session_state.interview_log = []
+        
+    # Header dengan gaya Dashboard
+    st.title("🎙️ AI Career Coach: Interview Room")
+    st.caption("Berlatihlah bicara secara alami. Jawaban Anda akan ditranskripsi dan dianalisis secara otomatis.")
+    st.divider()
 
-    # 3. Widget Mic
-    audio_data = mic_recorder(
-        start_prompt="Mulai Bicara 🎙️",
-        stop_prompt="Kirim Jawaban ✅",
-        key='interview_mic_unique' 
-    )
+    # Layout Kolom: Kiri untuk Chat, Kanan untuk Instruksi/Tips
+    col_main, col_sidebar = st.columns([2, 1])
 
-    # 4. Logika Pemrosesan (Taruh tepat di bawah widget mic)
+    with col_sidebar:
+        st.subheader("💡 Tips Interview")
+        st.info("""
+        - **Kontak Mata:** Meskipun virtual, tetap fokus pada kamera.
+        - **Metode STAR:** Gunakan (Situation, Task, Action, Result) untuk jawaban teknis.
+        - **Suara Jelas:** Bicara dengan tempo yang tenang.
+        """)
+        
+        if st.button("🔄 Reset Sesi Interview"):
+            # Logika reset state jika dibutuhkan
+            st.session_state.interview_log = []
+            st.session_state.interview_history = "AI Interviewer: Hello! Let's start. Tell me about yourself.\n"
+            st.session_state.current_q = "Hello! Let's start. Tell me about yourself."
+            st.rerun()
+
+    with col_main:
+        # 1. Area Pertanyaan Aktif (Dibuat menonjol)
+        st.markdown("### 🤖 Pertanyaan Saat Ini:")
+        with st.container(border=True):
+            st.subheader(st.session_state.current_q)
+            st.write("---")
+            # Widget Mic ditempatkan tepat di bawah pertanyaan
+            st.write("Klik tombol di bawah untuk merekam jawaban Anda:")
+            audio_data = mic_recorder(
+                start_prompt="Mulai Bicara 🎤",
+                stop_prompt="Selesai & Kirim ✅",
+                key='interview_mic_unique' 
+            )
+
+        # 2. Riwayat Percakapan (Menggunakan st.chat_message agar unik)
+        st.markdown("### 📝 Riwayat Jawaban Anda")
+
+        if not st.session_state.interview_log:
+            st.info("Belum ada jawaban yang terekam.")
+        else:
+            # Tampilkan riwayat dengan gaya chat
+            for i, msg in enumerate(st.session_state.interview_log):
+                with st.chat_message("user"):
+                    st.write(msg)
+
     if audio_data:
         audio_bytes = audio_data['bytes']
         
-        # Cek apakah audio ini baru atau duplikat dari rerun sebelumnya
         if "last_processed_audio" not in st.session_state or st.session_state.last_processed_audio != audio_bytes:
-            
-            # --- PROSES MULAI DI SINI ---
-            with open("temp_interview.mp3", "wb") as f:
-                f.write(audio_bytes)
-            
-            client = openai.OpenAI()
-            with open("temp_interview.mp3", "rb") as audio_file:
-                transcript = client.audio.transcriptions.create(
-                    model="whisper-1", 
-                    file=audio_file
-                )
-            user_text = transcript.text
+            with st.status("Sedang memproses suara Anda...", expanded=True) as status:
+                st.write("Mentranskripsi audio (Whisper)...")
+                with open("temp_interview.mp3", "wb") as f:
+                    f.write(audio_bytes)
+                
+                client = openai.OpenAI()
+                with open("temp_interview.mp3", "rb") as audio_file:
+                    transcript = client.audio.transcriptions.create(
+                        model="whisper-1", 
+                        file=audio_file
+                    )
+                user_text = transcript.text
+                st.session_state.interview_log.append(user_text)
 
-            st.session_state.interview_log.append(user_text)
+                st.write("Menganalisis jawaban & menyiapkan pertanyaan baru...")
+                response = agents["interview"].get_response(
+                    st.session_state.interview_history, 
+                    user_text
+                )
+                
+                st.session_state.interview_history += f"Candidate: {user_text}\nInterviewer: {response}\n"
+                st.session_state.current_q = response
+                st.session_state.last_processed_audio = audio_bytes
+                
+                os.remove("temp_interview.mp3")
+                status.update(label="Proses selesai!", state="complete", expanded=False)
             
-            # Panggil agent untuk jawaban
-            response = agents["interview"].get_response(
-                st.session_state.interview_history, 
-                user_text
-            )
-            
-            
-            # Simpan ke history dan tandai audio sudah diproses
-            st.session_state.interview_history += f"Candidate: {user_text}\nInterviewer: {response}\n"
-            st.session_state.current_q = response
-            st.session_state.last_processed_audio = audio_bytes # KUNCI PENTING
-            
-            os.remove("temp_interview.mp3")
-            st.rerun() # Refresh tampilan untuk memunculkan pertanyaan baru
-            st.success(f"You {user_text}")
+            st.rerun()
