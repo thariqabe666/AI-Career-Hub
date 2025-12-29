@@ -10,3 +10,4 @@ langfuse
 SpeechRecognition
 streamlit
 streamlit-mic-recorder
+pymupdf

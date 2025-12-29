@@ -56,7 +56,8 @@ if menu == "Smart Chat":
 
         with st.chat_message("assistant"):
             with st.spinner("Berpikir..."):
-                response = agents["orchestrator"].route_query(prompt)
+                # Kirim history agar AI ingat konteks percakapan sebelumnya
+                response = agents["orchestrator"].route_query(prompt, chat_history=st.session_state.messages)
                 st.markdown(response)
         st.session_state.messages.append({"role": "assistant", "content": response})
     
