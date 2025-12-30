@@ -13,8 +13,7 @@ load_dotenv()
 # Konfigurasi Halaman
 st.set_page_config(page_title="AI Career Hub", layout="wide")
 
-# Inisialisasi Agent (menggunakan cache agar tidak reload setiap saat)
-@st.cache_resource
+# Inisialisasi Agent
 def init_agents():
     return {
         "orchestrator": Orchestrator(),
@@ -55,10 +54,31 @@ if menu == "Smart Chat":
             st.markdown(prompt)
 
         with st.chat_message("assistant"):
-            with st.spinner("Berpikir..."):
-                # Kirim history agar AI ingat konteks percakapan sebelumnya
-                response = agents["orchestrator"].route_query(prompt, chat_history=st.session_state.messages)
-                st.markdown(response)
+            status = st.status("Berpikir...", expanded=True)
+            
+            # Helper generator to wrap the orchestrator stream for st.write_stream
+            def stream_handler():
+                full_response = ""
+                for mode, content in agents["orchestrator"].stream_query(prompt, chat_history=st.session_state.messages):
+                    if mode == "thought":
+                        status.write(content)
+                    elif mode == "content":
+                        full_response += content
+                        yield content
+                    elif mode == "metadata":
+                        # Store metadata for display below response
+                        st.session_state.last_metadata = content
+                status.update(label="Selesai!", state="complete", expanded=False)
+
+            # Use st.write_stream for typing effect (OUTSIDE status block)
+            response = st.write_stream(stream_handler())
+            
+            # Display Usage Insights (Groq-style)
+            if "last_metadata" in st.session_state:
+                m = st.session_state.last_metadata
+                st.caption(f"⚡ {m['latency']:.1f}s | 📥 {m['input_tokens']} tokens | 📤 {m['output_tokens']} tokens")
+                del st.session_state.last_metadata
+        
         st.session_state.messages.append({"role": "assistant", "content": response})
     
     # Add clear chat button
@@ -118,13 +138,31 @@ elif menu == "Career Advisor & CV Analysis":
 
             # Minta respon dari Agent (Gunakan Orchestrator atau Advisor)
             with st.chat_message("assistant"):
-                with st.spinner("Berpikir..."):
-                    # Kita buat history string dari advisor_messages untuk konteks
-                    history_text = "\n".join([f"{m['role']}: {m['content']}" for m in st.session_state.advisor_messages[-5:]])
-                    
-                    # Kamu bisa memanggil orchestrator agar AI tetap ingat konteks CV-mu
-                    response = agents["orchestrator"].route_request(prompt, history_text)
-                    st.markdown(response)
+                status = st.status("Berpikir...", expanded=True)
+                # Kita buat history string dari advisor_messages untuk konteks
+                history_text = "\n".join([f"{m['role']}: {m['content']}" for m in st.session_state.advisor_messages[-5:]])
+                
+                def stream_handler():
+                    full_response = ""
+                    # Gunakan orchestrator agar AI tetap ingat konteks CV-mu (history_text)
+                    for mode, content in agents["orchestrator"].stream_query(prompt, chat_history=history_text):
+                        if mode == "thought":
+                            status.write(content)
+                        elif mode == "content":
+                            full_response += content
+                            yield content
+                        elif mode == "metadata":
+                            # Store metadata for display
+                            st.session_state.last_metadata = content
+                    status.update(label="Selesai!", state="complete", expanded=False)
+
+                response = st.write_stream(stream_handler())
+
+                # Display Usage Insights
+                if "last_metadata" in st.session_state:
+                    m = st.session_state.last_metadata
+                    st.caption(f"⚡ {m['latency']:.1f}s | 📥 {m['input_tokens']} tokens | 📤 {m['output_tokens']} tokens")
+                    del st.session_state.last_metadata
             
             # Simpan respon AI
             st.session_state.advisor_messages.append({"role": "assistant", "content": response})

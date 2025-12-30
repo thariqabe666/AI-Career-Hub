@@ -33,7 +33,7 @@ class RAGAgent:
         
         api_key = os.getenv("OPENAI_API_KEY")
         self.embeddings = OpenAIEmbeddings(model="text-embedding-3-small", api_key=api_key)
-        self.llm = ChatOpenAI(model="gpt-4o-mini", temperature=0, api_key=api_key)
+        self.llm = ChatOpenAI(model="gpt-4o-mini", temperature=0, api_key=api_key, tags=["rag_agent"])
         
         # Initialize Langfuse CallbackHandler
         self.langfuse_handler = CallbackHandler()
@@ -42,6 +42,10 @@ class RAGAgent:
         @tool
         def search_knowledge_base(query: str) -> str:
             """Searches the career knowledge base for relevant documents and information."""
+            from langgraph.config import get_stream_writer
+            writer = get_stream_writer()
+            writer({"type": "rag_search", "content": query})
+            
             docs = self.retrieve_documents(query)
             if not docs:
                 return "No specific data found in the knowledge base."
