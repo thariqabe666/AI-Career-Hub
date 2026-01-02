@@ -33,7 +33,12 @@ class RAGAgent:
         
         api_key = os.getenv("OPENAI_API_KEY")
         self.embeddings = OpenAIEmbeddings(model="text-embedding-3-small", api_key=api_key)
-        self.llm = ChatOpenAI(model="gpt-4o-mini", temperature=0, api_key=api_key)
+        self.llm = ChatOpenAI(
+            model="gpt-4o-mini", 
+            temperature=0, 
+            api_key=api_key,
+            tags=["rag_agent"]
+        )
         
         # Initialize Langfuse CallbackHandler
         self.langfuse_handler = CallbackHandler()
@@ -42,6 +47,14 @@ class RAGAgent:
         @tool
         def search_knowledge_base(query: str) -> str:
             """Searches the career knowledge base for relevant documents and information."""
+            try:
+                from langgraph.config import get_stream_writer
+                writer = get_stream_writer()
+                if writer:
+                    writer({"type": "rag_search", "content": query})
+            except Exception:
+                pass
+            
             docs = self.retrieve_documents(query)
             if not docs:
                 return "No specific data found in the knowledge base."
@@ -53,7 +66,7 @@ class RAGAgent:
         Your task is to answer user questions using the 'search_knowledge_base' tool.
         
         INSTRUCTIONS:
-        1. LANGUAGE: ALWAYS respond in the SAME LANGUAGE as the user.
+        1. LANGUAGE: ALWAYS respond in the SAME LANGUAGE as the user's latest query. If retrieved info is in a different language, translate it.
         2. SMART SEARCH: Use the tool to find relevant data.
         3. FALLBACK: If the tool returns no specific data, provide a high-quality response based on your general career knowledge.
         4. TONE: Maintain a friendly, professional, and encouraging persona.
@@ -61,6 +74,7 @@ class RAGAgent:
         Respond clearly based on the retrieved information or your general expertise."""
 
         # Create a ReAct-style agent to show thinking steps
+        from langchain.agents import create_agent
         self.agent_executor = create_agent(
             model=self.llm,
             tools=self.tools,
@@ -97,25 +111,15 @@ class RAGAgent:
         End-to-end RAG run using an Agent to show thinking steps.
         """
         logger.info(f"RAG Agent received query: {query}")
-        
-        print("\n> Entering new RAG Agent Executor chain...")
-        
         try:
-            # We use the agent to process the query, which will trigger the ReAct loop
             response = self.agent_executor.invoke(
                 {"messages": [("user", query)]},
-                config={"callbacks": [self.langfuse_handler, StdOutCallbackHandler()]}
+                config={"callbacks": [self.langfuse_handler]}
             )
-            
-            print("> Finished chain.")
-            
-            # The result is in the last message content
             return response["messages"][-1].content
-            
         except Exception as e:
             logger.error(f"Error in RAG Agent: {e}")
-            print("> Finished chain with error.")
-            return f"Maaf, ada kendala teknis saat mencari data: {str(e)}"
+            return f"Sorry, there was a technical issue while searching: {str(e)}"
 
 if __name__ == "__main__":
     agent = RAGAgent()

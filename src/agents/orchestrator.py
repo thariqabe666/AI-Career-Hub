@@ -18,8 +18,13 @@ load_dotenv()
 class Orchestrator:
     def __init__(self):
         api_key = os.getenv("OPENAI_API_KEY")
-        # Menggunakan GPT-4o-mini untuk efisiensi sebagai master agent
-        self.llm = ChatOpenAI(model="gpt-4o-mini", temperature=0, api_key=api_key)
+        # Using GPT-4o-mini as the master agent for efficiency
+        self.llm = ChatOpenAI(
+            model="gpt-4o-mini", 
+            temperature=0, 
+            api_key=api_key,
+            tags=["orchestrator"]
+        )
         
         # Inisialisasi sub-agents
         self.sql_agent = SQLAgent()
@@ -33,27 +38,35 @@ class Orchestrator:
             Tool(
                 name="sql_job_stats",
                 func=self.sql_agent.run,
-                description="""Gunakan untuk pertanyaan yang membutuhkan data statistik, angka, atau daftar pekerjaan dari database SQL. 
-                Contoh: 'Berapa jumlah lowongan Python?', 'Tampilkan 5 loker Data Science'."""
+                description="""Use for queries requiring statistical data, numbers, or lists of jobs from the SQL database. 
+                Examples: 'How many Python vacancies are there?', 'Show 5 Data Science jobs'."""
             ),
             Tool(
                 name="rag_career_advice",
                 func=self.rag_agent.run,
-                description="""Gunakan untuk pertanyaan deskriptif tentang detail kualifikasi pekerjaan, saran karir, informasi perusahaan, 
-                atau hal-hal yang bersifat pengetahuan umum karir dari dokumen PDF."""
+                description="""Use for descriptive queries about job qualification details, career advice, company information, 
+                or general career knowledge from documents."""
             )
         ]
         
         # 2. Definisikan System Prompt
         system_prompt = """You are a Master AI Career Advisor. Your goal is to help users with their career queries by using the appropriate tools.
             
+            [CRITICAL LANGUAGE CONSTRAINT]
+            - Detect the language of the user's latest query (English or Indonesian).
+            - You MUST provide your FINAL response in that SAME language.
+            - If tools return information in Indonesian but the user asked in English, you MUST translate the findings to English.
+            - If tools return information in English but the user asked in Indonesian, you MUST translate the findings to Indonesian.
+            - NEVER switch to Indonesian if the user is asking in English, even if the job data is in Indonesian.
+
             GUIDELINES:
             1. Use 'sql_job_stats' for quantitative data (counts, lists, comparisons of numbers).
             2. Use 'rag_career_advice' for qualitative info (qualifications, advice, descriptions).
             3. You can use BOTH tools sequentially if a query requires it (e.g., 'How many Python jobs are there and what skills do they need?').
             4. If the user is just greeting or talking casually, respond politely without using tools.
-            5. ALWAYS respond in the SAME LANGUAGE as the user (Indonesian or English).
-            6. Be professional, encouraging, and helpful."""
+            5. Do NOT provide intermediate responses or summaries after each tool call.
+            6. Gather ALL necessary information from tools first, THEN provide ONE comprehensive final response in the user's language.
+            7. Be professional, encouraging, and helpful."""
             
         # 3. Inisialisasi Agent menggunakan API terbaru langchain 1.0+
         self.agent = create_agent(
@@ -77,11 +90,11 @@ class Orchestrator:
                         converted.append(HumanMessage(content=content))
                     elif role == "assistant":
                         converted.append(AIMessage(content=content))
-                elif hasattr(m, "content"): # Sudah objek message
+                elif hasattr(m, "content"): # Already a message object
                     converted.append(m)
         elif isinstance(chat_history, str):
-            # Jika string, kita anggap sebagai satu konteks awal
-            converted.append(HumanMessage(content=f"Konteks percakapan sebelumnya:\n{chat_history}"))
+            # If string, treat as initial context
+            converted.append(HumanMessage(content=f"Previous conversation context:\n{chat_history}"))
             
         return converted
 
@@ -93,7 +106,7 @@ class Orchestrator:
 
     def route_query(self, user_query: str, chat_history: any = None) -> str:
         """
-        Utama entry point untuk memproses query menggunakan API langchain 1.0+.
+        Main entry point untuk memproses query menggunakan API langchain 1.0+.
         """
         try:
             formatted_history = self._convert_history(chat_history)
@@ -114,7 +127,87 @@ class Orchestrator:
 
         except Exception as e:
             logger.error(f"Orchestrator Error: {str(e)}")
-            return f"Maaf, ada kendala teknis: {str(e)}"
+            return f"Sorry, there was a technical issue: {str(e)}"
+
+    def stream_query(self, user_query: str, chat_history: any = None):
+        """
+        Streaming version of route_query with deep transparency and sub-agent tracking.
+        """
+        import time
+        from langchain_core.messages import AIMessage, ToolMessage, BaseMessage
+        
+        start_time = time.perf_counter()
+        total_input_tokens = 0
+        total_output_tokens = 0
+        current_agent = "orchestrator"
+        
+        try:
+            formatted_history = self._convert_history(chat_history)
+            messages = formatted_history + [HumanMessage(content=user_query)]
+            
+            logger.info(f"Master Agent deep streaming query: {user_query}")
+            
+            # Use multi-mode stream for maximum detail. subgraphs=True yields (path, mode, data).
+            for _, mode, data in self.agent.stream(
+                {"messages": messages},
+                stream_mode=["updates", "messages", "custom"],
+                config={"callbacks": [self.langfuse_handler]},
+                subgraphs=True
+            ):
+                if mode == "updates":
+                    for node_name, state in data.items():
+                        if "messages" in state:
+                            msg = state["messages"][-1]
+                            
+                            # Detect Tool Usage
+                            if isinstance(msg, AIMessage) and msg.tool_calls:
+                                for tc in msg.tool_calls:
+                                    yield "thought", f"🛠️ **Using tool:** `{tc['name']}`"
+                            elif isinstance(msg, ToolMessage):
+                                content_snippet = msg.content[:300] + "..." if len(msg.content) > 300 else msg.content
+                                yield "thought", f"✅ **Tool finished.** Output: \n```\n{content_snippet}\n```"
+
+                elif mode == "custom":
+                    if isinstance(data, dict):
+                        event_type = data.get("type")
+                        content = data.get("content")
+                        if event_type == "sql_query":
+                            yield "thought", f"🔍 **Generating SQL:**\n```sql\n{content}\n```"
+                        elif event_type == "rag_search":
+                            yield "thought", f"📖 **Searching Knowledge Base for:** `{content}`"
+
+                elif mode == "messages":
+                    token, metadata = data
+                    tags = metadata.get("tags", [])
+                    
+                    # Update Usage Metadata
+                    if hasattr(token, "usage_metadata") and token.usage_metadata:
+                        total_input_tokens = token.usage_metadata.get("input_tokens", total_input_tokens)
+                        total_output_tokens = token.usage_metadata.get("output_tokens", total_output_tokens)
+                    
+                    # Track which agent is speaking
+                    if tags:
+                        this_agent = tags[0]
+                        if this_agent != current_agent and this_agent in ["sql_agent", "rag_agent"]:
+                            yield "thought", f"🤖 **{this_agent.replace('_', ' ').title()}** starts processing..."
+                            current_agent = this_agent
+                        elif "orchestrator" in tags:
+                            current_agent = "orchestrator"
+                    if hasattr(token, "content") and token.content:
+                        # Output ONLY content tagged with 'orchestrator' to hide internal agent dialogue
+                        if tags and "orchestrator" in tags:
+                            yield "content", token.content
+
+            # Final Metadata
+            yield "metadata", {
+                "latency": time.perf_counter() - start_time,
+                "input_tokens": total_input_tokens,
+                "output_tokens": total_output_tokens
+            }
+
+        except Exception as e:
+            logger.error(f"Orchestrator Deep Stream Error: {str(e)}")
+            yield "content", f"Sorry, there was a technical issue during streaming: {str(e)}"
 
 if __name__ == "__main__":
     orchestrator = Orchestrator()
