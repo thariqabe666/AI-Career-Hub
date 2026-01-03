@@ -10,3 +10,7 @@ langfuse
 SpeechRecognition
 streamlit
 streamlit-mic-recorder
+fastapi
+uvicorn
+PyMuPDF
+langgraph
