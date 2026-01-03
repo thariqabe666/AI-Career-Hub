@@ -8,13 +8,14 @@ from typing import List, Optional
 from dotenv import load_dotenv
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
-
 from langchain_core.documents import Document
-from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
+from langchain_core.tools import tool
 
 from src.database.setup_qdrant import get_qdrant_client
 from langfuse.langchain import CallbackHandler
+from langchain.agents import create_agent
+from langchain_core.callbacks import StdOutCallbackHandler
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -30,45 +31,45 @@ class RAGAgent:
         self.collection_name = collection_name
         self.client = get_qdrant_client()
         
-        # Initialize Embeddings (must match the vector size in setup_qdrant, default 1536)
         api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            logger.warning("OPENAI_API_KEY is not set. RAG Agent may fail.")
-            
         self.embeddings = OpenAIEmbeddings(model="text-embedding-3-small", api_key=api_key)
-        
-        # Initialize LLM
-        self.llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.7, api_key=api_key)
-        
-        # Prompt Template
-        self.template = """Answer the question based only on the following context:
-        {context}
-
-        Question: {question}
-        
-        If you cannot find the answer in the context, please response anything that relevant according to the user's question
-        """
-        self.prompt = ChatPromptTemplate.from_template(
-            """You are a helpful Careeer Assistant.
-            
-            Context from our database:
-            {context}
-            
-            User Question:
-            {question}
-            
-            Instructions:
-            1. If the context contains relevant information, answer the question clearly using that information.
-            2. If the context is empty or doesn't have the answer, DO NOT say "I don't know" or "No data".
-            3. Instead, give a general professional response based on your general knowledge as an AI, then suggest what the user can ask or do next (e.g., "Currently, I don't have specific job listings for that, but generally for this role you should prepare...")
-            4. Keep the tone encouraging and professional.
-
-            Your Response:
-            """
-        )
+        self.llm = ChatOpenAI(model="gpt-4o-mini", temperature=0, api_key=api_key, tags=["rag_agent"])
         
         # Initialize Langfuse CallbackHandler
         self.langfuse_handler = CallbackHandler()
+
+        # Define the search tool for the agent
+        @tool
+        def search_knowledge_base(query: str) -> str:
+            """Searches the career knowledge base for relevant documents and information."""
+            from langgraph.config import get_stream_writer
+            writer = get_stream_writer()
+            writer({"type": "rag_search", "content": query})
+            
+            docs = self.retrieve_documents(query)
+            if not docs:
+                return "No specific data found in the knowledge base."
+            return "\n\n".join([doc.page_content for doc in docs])
+
+        self.tools = [search_knowledge_base]
+        
+        system_prompt = """You are a professional Career Assistant. 
+        Your task is to answer user questions using the 'search_knowledge_base' tool.
+        
+        INSTRUCTIONS:
+        1. LANGUAGE: ALWAYS respond in the SAME LANGUAGE as the user.
+        2. SMART SEARCH: Use the tool to find relevant data.
+        3. FALLBACK: If the tool returns no specific data, provide a high-quality response based on your general career knowledge.
+        4. TONE: Maintain a friendly, professional, and encouraging persona.
+        
+        Respond clearly based on the retrieved information or your general expertise."""
+
+        # Create a ReAct-style agent to show thinking steps
+        self.agent_executor = create_agent(
+            model=self.llm,
+            tools=self.tools,
+            system_prompt=system_prompt
+        )
 
     def retrieve_documents(self, query: str, limit: int = 3) -> List[Document]:
         """
@@ -86,8 +87,6 @@ class RAGAgent:
             
             documents = []
             for hit in search_results:
-                # Extract text content from payload
-                # Adjust 'text' key based on how you ingested data
                 page_content = hit.payload.get("text", hit.payload.get("content", str(hit.payload)))
                 metadata = hit.payload
                 documents.append(Document(page_content=page_content, metadata=metadata))
@@ -99,43 +98,29 @@ class RAGAgent:
 
     def run(self, query: str) -> str:
         """
-        End-to-end RAG run: Retrieve -> Generate.
+        End-to-end RAG run using an Agent to show thinking steps.
         """
         logger.info(f"RAG Agent received query: {query}")
         
-        # 1. Retrieve
-        docs = self.retrieve_documents(query)
+        print("\n> Entering new RAG Agent Executor chain...")
         
-        if not docs:
-            context_text = "No specific data found in the database. Please answer using your general knowledge."
-        else:
-            context_text = "\n\n".join([doc.page_content for doc in docs])
-        
-        flexible_prompt = ChatPromptTemplate.from_template(
-            """You are a professional Career Assistant.
-            CONTEXT FROM DATABASE:
-            {context}
-            USER QUESTION:
-            {question}
-            INSTRUCTIONS:
-            1. LANGUAGE CONSISTENCY: Detect the language of the user's question. ALWAYS respond in the SAME LANGUAGE as the user (e.g., if asked in Indonesian, respond in Indonesian; if asked in English, respond in English).
-            2. SMART RETRIEVAL: If the DATABASE CONTEXT contains relevant information, use it to provide a detailed answer.
-            3. NO-FAIL POLICY: If the CONTEXT is empty, irrelevant, or does not contain specific data, DO NOT say "I don't know", "I don't have enough information", or "No data found".
-            4. FALLBACK STRATEGY: In case of empty context, provide a high-quality response based on your general knowledge as a career expert. Offer helpful suggestions, industry trends, or general career advice related to the user's query.
-            5. GENERAL INTERACTION: For greetings (Hi, Hello), introductions, or general small talk, respond naturally and warmly without being restricted by the database context.
-            6. JOB SPECIFIC QUERIES: For specific job opening questions, check the context first. If not found, explain that while specific local listings aren't available right now, you can provide general advice on how to apply for such roles.
-            7. TONE: Maintain a friendly, professional, and encouraging persona at all times.
-            YOUR RESPONSE:
-            """
-        )
-        
-        # 3. Generate
-        chain = flexible_prompt | self.llm | StrOutputParser()
-        
-        response = chain.invoke({"context": context_text, "question": query})
-        return response
+        try:
+            # We use the agent to process the query, which will trigger the ReAct loop
+            response = self.agent_executor.invoke(
+                {"messages": [("user", query)]},
+                config={"callbacks": [self.langfuse_handler, StdOutCallbackHandler()]}
+            )
+            
+            print("> Finished chain.")
+            
+            # The result is in the last message content
+            return response["messages"][-1].content
+            
+        except Exception as e:
+            logger.error(f"Error in RAG Agent: {e}")
+            print("> Finished chain with error.")
+            return f"Maaf, ada kendala teknis saat mencari data: {str(e)}"
 
 if __name__ == "__main__":
-    # Test run
     agent = RAGAgent()
-    # print(agent.run("what is this data about?"))
+    print(agent.run("What are the soft skills for Python developers?"))
