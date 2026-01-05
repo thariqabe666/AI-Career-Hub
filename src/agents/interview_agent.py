@@ -26,7 +26,7 @@ class InterviewAgent:
             CANDIDATE ANSWER: {answer}
             
             INSTRUCTIONS:
-            1. Response in the SAME LANGUAGE as the candidate.
+            1. CRITICAL: Response in the EXACT SAME LANGUAGE as the candidate's last answer. If they speak English, you MUST speak English. If they speak Indonesian, you MUST speak Indonesian.
             2. Give brief feedback on the answer based on the job requirements and candidate's CV.
             3. Ask exactly ONE follow-up question that is relevant to the role and the candidate's previous answer.
             
@@ -38,6 +38,58 @@ class InterviewAgent:
         return chain.invoke({
             "history": history, 
             "answer": user_answer,
+            "job_description": job_description,
+            "cv_text": cv_text
+        })
+
+    def evaluate_session(self, history, job_description, cv_text):
+        """
+        Evaluates the entire interview session.
+        """
+        eval_prompt = ChatPromptTemplate.from_template("""
+            You are an expert HR Interview Evaluator. 
+            Analyze the following interview history between an Interviewer and a Candidate for a specific job.
+            
+            JOB DESCRIPTION:
+            {job_description}
+            
+            CANDIDATE CV:
+            {cv_text}
+            
+            INTERVIEW HISTORY:
+            {history}
+            
+            INSTRUCTIONS:
+            1. CRITICAL: You MUST evaluate the candidate in the EXACT SAME LANGUAGE they used primarily during the interview. 
+            2. If the candidate spoke English, the entire evaluation MUST be in English. 
+            3. If the candidate spoke Indonesian, the entire evaluation MUST be in Indonesian.
+            4. DO NOT mix languages. DO NOT use Indonesian if the interview was in English.
+            
+            Output your evaluation in Markdown format with the EXACT following structure:
+            
+            # 🏆 OVERALL SCORE: [Insert Number 0-100 here]
+            
+            ## 📝 Session Summary
+            [Briefly summarize how the interview went]
+            
+            ## ✅ Key Strengths
+            - [Strength 1]
+            - [Strength 2]
+            - [Strength 3]
+            
+            ## ⚠️ Areas for Improvement
+            - [Area 1]
+            - [Area 2]
+            - [Area 3]
+            
+            ## 💡 Actionable Insights
+            [Advice for the candidate]
+            
+            YOUR EVALUATION:
+        """)
+        chain = eval_prompt | self.llm | StrOutputParser()
+        return chain.invoke({
+            "history": history,
             "job_description": job_description,
             "cv_text": cv_text
         })

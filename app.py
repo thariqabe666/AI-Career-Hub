@@ -328,11 +328,65 @@ if st.session_state.track == "🚀 Career Co-Pilot":
                         st.session_state.selected_job = job
                         st.session_state.page = "workspace"
                         st.rerun()
+            
+            # --- CUSTOM JOB INPUT ---
+            st.markdown("---")
+            st.markdown("""
+            <div style="text-align: center; padding: 2rem 0;">
+                <h3 style="margin-bottom: 0.5rem;">Can't find the right role? 🔍</h3>
+                <p style="color: #94a3b8;">Input a specific job description to get tailored analysis and interview practice.</p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            with st.expander("✨ Process a Custom Job Description", expanded=False):
+                with st.form("custom_job_form"):
+                    cust_title = st.text_input("Job Title", placeholder="e.g. Senior Backend Engineer")
+                    cust_company = st.text_input("Company Name", placeholder="e.g. Google")
+                    cust_desc = st.text_area("Job Description", placeholder="Paste the full job description here...", height=200)
+                    
+                    submit_custom = st.form_submit_button("Launch Workspace 🚀", use_container_width=True)
+                    
+                    if submit_custom:
+                        if not cust_title or not cust_desc:
+                            st.error("Please provide at least a Job Title and Description.")
+                        else:
+                            st.session_state.selected_job = {
+                                "title": cust_title,
+                                "company": cust_company if cust_company else "Custom Company",
+                                "description": cust_desc,
+                                "location": "N/A",
+                                "type": "N/A",
+                                "salary": "N/A"
+                            }
+                            st.session_state.page = "workspace"
+                            # Reset job-specific state just in case
+                            for key in ["interview_log", "interview_history_text", "current_q", "question_count", "interview_ended", "evaluation_report", "max_questions"]:
+                                if key in st.session_state:
+                                    del st.session_state[key]
+                            st.rerun()
 
     # --- PHASE 3: WORKSPACE ---
     elif st.session_state.page == "workspace":
         job = st.session_state.selected_job
-        st.markdown(f"## 🛠️ Workspace: <span style='color: #818cf8;'>{job.get('title')}</span> @ {job.get('company')}", unsafe_allow_html=True)
+        
+        # Header with Back Button
+        col_back, col_title = st.columns([1, 5])
+        with col_back:
+            if st.button("⬅️ Back", use_container_width=True):
+                st.session_state.page = "dashboard"
+                # Reset job-specific session state
+                keys_to_reset = [
+                    "selected_job", "interview_log", "interview_history_text", 
+                    "current_q", "question_count", "interview_ended", 
+                    "evaluation_report", "max_questions"
+                ]
+                for key in keys_to_reset:
+                    if key in st.session_state:
+                        del st.session_state[key]
+                st.rerun()
+        
+        with col_title:
+            st.markdown(f"## 🛠️ Workspace: <span style='color: #818cf8;'>{job.get('title')}</span> @ {job.get('company')}", unsafe_allow_html=True)
         
         # Display Job Info in a nice glass container
         with st.container():
@@ -404,73 +458,151 @@ if st.session_state.track == "🚀 Career Co-Pilot":
                 st.info("Let the AI write a cover letter that highlights your strengths.")
 
         with tab3:
-            st.subheader("Interview Preparation")
+            st.subheader("Interactive Interview Simulator")
+            
+            # --- Initialize Interview State ---
             if "interview_log" not in st.session_state:
                 st.session_state.interview_log = []
             if "interview_history_text" not in st.session_state:
                 st.session_state.interview_history_text = f"You are interviewing for {job.get('title')} at {job.get('company')}.\n"
                 st.session_state.current_q = f"Hello! Let's start the interview for the {job.get('title')} position. Could you introduce yourself?"
-                # Initialize history with the first question
                 st.session_state.interview_log.append({"role": "assistant", "content": st.session_state.current_q})
+                st.session_state.question_count = 1
+                st.session_state.interview_ended = False
+                st.session_state.evaluation_report = None
 
-            col_left, col_right = st.columns([2, 1])
-            with col_right:
-                st.markdown('<div class="glass-container" style="padding: 1rem;"><h4>💡 Pro Tips</h4><ul style="font-size: 0.9rem;"><li>Keep answers concise.</li><li>Use STAR method.</li><li>Smile!</li></ul></div>', unsafe_allow_html=True)
-                if st.button("Reset Interview"):
+            # --- Layout: Main Chat vs Sidebar Tips ---
+            col_chat, col_info = st.columns([2, 1])
+
+            with col_info:
+                st.markdown(f"""
+                <div class="glass-container" style="padding: 1.5rem;">
+                    <h4 style="margin-top:0;">Session Info</h4>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                # Input for question limit - only show before the interview starts or in sidebar
+                if "max_questions" not in st.session_state:
+                    st.session_state.max_questions = 5
+                
+                if st.session_state.question_count == 1 and not st.session_state.interview_ended:
+                    st.session_state.max_questions = st.number_input(
+                        "Number of questions to practice:", 
+                        min_value=1, max_value=10, value=5, step=1
+                    )
+                else:
+                    st.write(f"**Target Questions:** {st.session_state.max_questions}")
+                
+                st.write(f"**Current Progress:** {st.session_state.question_count} / {st.session_state.max_questions}")
+                st.markdown('<p style="font-size: 0.9rem; color: #94a3b8;">The interview will automatically conclude after reaching the target for a full evaluation.</p>', unsafe_allow_html=True)
+                
+                if not st.session_state.interview_ended:
+                    if st.button("🏁 End Interview Early", use_container_width=True):
+                        st.session_state.interview_ended = True
+                        st.rerun()
+                
+                if st.button("🔄 Reset Session", key="reset_int", use_container_width=True):
                     del st.session_state.interview_log
                     del st.session_state.interview_history_text
+                    if "question_count" in st.session_state: del st.session_state.question_count
+                    if "interview_ended" in st.session_state: del st.session_state.interview_ended
+                    if "evaluation_report" in st.session_state: del st.session_state.evaluation_report
+                    if "max_questions" in st.session_state: del st.session_state.max_questions
                     st.rerun()
 
-            with col_left:
-                st.markdown(f"**Interviewer:** {st.session_state.current_q}")
-                audio_data = mic_recorder(start_prompt="Record Answer 🎤", stop_prompt="Stop & Send ✅", key='workspace_mic')
-                
-                if audio_data:
-                    audio_bytes = audio_data['bytes']
-                    audio_hash = hashlib.md5(audio_bytes).hexdigest()
+            with col_chat:
+                if not st.session_state.interview_ended:
+                    # Message from typical chat interface
+                    st.markdown(f"**Interviewer:** {st.session_state.current_q}")
                     
-                    # Only process if this is a new recording
-                    if "last_processed_audio_hash" not in st.session_state or st.session_state.last_processed_audio_hash != audio_hash:
-                        with st.status("Processing Interview Response...", expanded=False):
-                            with open("temp_ws_int.mp3", "wb") as f: f.write(audio_bytes)
-                            client = openai.OpenAI()
-                            with open("temp_ws_int.mp3", "rb") as audio_file:
-                                transcript = client.audio.transcriptions.create(model="whisper-1", file=audio_file)
-                            user_text = transcript.text
-                            
-                            # Append user answer to log
-                            st.session_state.interview_log.append({"role": "user", "content": user_text})
-                            
-                            # Pass CV and Job Description for better context
-                            response = agents["interview"].get_response(
-                                st.session_state.interview_history_text, 
-                                user_text,
+                    audio_data = mic_recorder(
+                        start_prompt="Click to Speak 🎤", 
+                        stop_prompt="Stop & Send ✅", 
+                        key='workspace_mic'
+                    )
+                    
+                    if audio_data:
+                        audio_bytes = audio_data['bytes']
+                        audio_hash = hashlib.md5(audio_bytes).hexdigest()
+                        
+                        if "last_processed_audio_hash" not in st.session_state or st.session_state.last_processed_audio_hash != audio_hash:
+                            with st.status("Analyzing your response...", expanded=False):
+                                # 1. Transcription
+                                with open("temp_ws_int.mp3", "wb") as f: f.write(audio_bytes)
+                                client = openai.OpenAI()
+                                with open("temp_ws_int.mp3", "rb") as audio_file:
+                                    transcript = client.audio.transcriptions.create(model="whisper-1", file=audio_file)
+                                user_text = transcript.text
+                                st.session_state.interview_log.append({"role": "user", "content": user_text})
+                                
+                                # 2. Check for End of Session
+                                if st.session_state.question_count >= st.session_state.max_questions:
+                                    st.session_state.interview_ended = True
+                                else:
+                                    # 3. Get LLM Response
+                                    response = agents["interview"].get_response(
+                                        st.session_state.interview_history_text, 
+                                        user_text,
+                                        job.get('description', ''),
+                                        st.session_state.cv_text or ''
+                                    )
+                                    st.session_state.interview_log.append({"role": "assistant", "content": response})
+                                    st.session_state.interview_history_text += f"Candidate: {user_text}\nInterviewer: {response}\n"
+                                    st.session_state.current_q = response
+                                    st.session_state.question_count += 1
+                                
+                                st.session_state.last_processed_audio_hash = audio_hash
+                                os.remove("temp_ws_int.mp3")
+                            st.rerun()
+                else:
+                    # --- EVALUATION PHASE ---
+                    if not st.session_state.evaluation_report:
+                        with st.status("Generating Final Evaluation...", expanded=True):
+                            st.write("Reviewing interview history...")
+                            report = agents["interview"].evaluate_session(
+                                st.session_state.interview_history_text,
                                 job.get('description', ''),
                                 st.session_state.cv_text or ''
                             )
+                            # Clean up potential code block wrapping
+                            if report.startswith("```markdown"):
+                                report = report[11:]
+                            if report.startswith("```"):
+                                report = report[3:]
+                            if report.endswith("```"):
+                                report = report[:-3]
                             
-                            # Append interviewer response to log
-                            st.session_state.interview_log.append({"role": "assistant", "content": response})
-                            
-                            st.session_state.interview_history_text += f"Candidate: {user_text}\nInterviewer: {response}\n"
-                            st.session_state.current_q = response
-                            st.session_state.last_processed_audio_hash = audio_hash
-                            os.remove("temp_ws_int.mp3")
-                        st.rerun()
-
-                # Display the most recent transcription clearly if history exists
-                user_messages = [m for m in st.session_state.interview_log if m["role"] == "user"]
-                if user_messages:
+                            st.session_state.evaluation_report = report.strip()
+                            st.rerun()
+                    
+                    st.success("🎉 Interview Complete!")
+                    
+                    # --- Improved Score UI ---
+                    report_text = st.session_state.evaluation_report
+                    score_val = "N/A"
+                    remaining_report = report_text
+                    
+                    # Try to extract score from "# 🏆 OVERALL SCORE: [value]"
+                    import re
+                    score_match = re.search(r"# 🏆 OVERALL SCORE:\s*(\d+)", report_text)
+                    if score_match:
+                        score_val = score_match.group(1)
+                        # Remove the score line from the report to avoid duplication
+                        remaining_report = re.sub(r"# 🏆 OVERALL SCORE:\s*\d+", "", report_text).strip()
+                    
+                    col_score, col_empty = st.columns([1, 2])
+                    with col_score:
+                        st.metric("Overall Performance", f"{score_val}/100")
+                    
                     st.markdown("---")
-                    st.markdown("### 🎙️ Your Latest Answer")
-                    st.info(user_messages[-1]["content"])
+                    # Render the remaining evaluation as clean Markdown
+                    st.markdown(remaining_report)
 
+                # --- Conversation History ---
                 st.markdown("---")
-                st.markdown("### 📜 Interview History")
-                # Filter out the current active question if it's already in the log to avoid duplication in display
-                # History shows everything in order
+                st.markdown("### 💬 Conversation History")
                 for msg in reversed(st.session_state.interview_log):
-                    with st.chat_message(msg["role"]): 
+                    with st.chat_message(msg["role"]):
                         st.write(msg["content"])
 
 # --- TRACK 2: SMART CHAT ---
