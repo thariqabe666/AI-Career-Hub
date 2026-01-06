@@ -1,0 +1,22 @@
+# .dockerignore
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+env
+venv
+.env
+.git
+.gitignore
+Dockerfile
+.dockerignore
+README.md
+test*
+*.log
+data/raw/
+data/interim/
+*.sqlite
+*.pdf
+*.jpg
+*.png
